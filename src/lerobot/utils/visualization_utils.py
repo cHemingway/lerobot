@@ -25,7 +25,11 @@ def _init_rerun(session_name: str = "lerobot_control_loop") -> None:
     os.environ["RERUN_FLUSH_NUM_BYTES"] = batch_size
     rr.init(session_name)
     memory_limit = os.getenv("LEROBOT_RERUN_MEMORY_LIMIT", "10%")
-    rr.spawn(memory_limit=memory_limit)
+    rr_viewer = os.getenv("LERBOBOT_RERUN_VIEWER_URL")
+    if rr_viewer:
+        rr.connect_grpc(rr_viewer)
+    else:  # If no viewer URL is provided, spawn a local viewer
+        rr.spawn(memory_limit=memory_limit)
 
 
 def log_rerun_data(observation: dict[str | Any], action: dict[str | Any]):
