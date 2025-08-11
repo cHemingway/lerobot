@@ -14,15 +14,21 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+
 from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
 
+import numpy as np
+import placo
 import pytest
+from placo_utils.visualization import robot_viz
 
 from lerobot.robots.so101_follower import (
     SO101FollowerEndEffector,
     SO101FollowerEndEffectorConfig,
 )
+
+URDF_PATH = "/Users/chris/repos/SO-ARM100/Simulation/SO101/so101_new_calib.urdf"
 
 
 def _make_bus_mock() -> MagicMock:
@@ -71,13 +77,17 @@ def follower():
         ),
         patch.object(SO101FollowerEndEffector, "configure", lambda self: None),
     ):
-        cfg = SO101FollowerEndEffectorConfig(
-            port="/dev/null", urdf_path="/Users/chris/repos/SO-ARM100/Simulation/SO101/so101_new_calib.urdf"
-        )
+        cfg = SO101FollowerEndEffectorConfig(port="/dev/null", urdf_path=URDF_PATH)
         robot = SO101FollowerEndEffector(cfg)
         yield robot
         if robot.is_connected:
             robot.disconnect()
+
+
+@pytest.fixture
+def forward_kinematics():
+    robot = placo.RobotWrapper(URDF_PATH)
+    yield robot
 
 
 def test_connect_disconnect(follower):
@@ -101,13 +111,40 @@ def test_get_observation(follower):
         assert obs[f"{motor}.pos"] == idx
 
 
-def test_send_action(follower):
+def test_send_action(follower, forward_kinematics):
     follower.connect()
 
-    action = {f"{m}.pos": i * 10 for i, m in enumerate(follower.bus.motors, 1)}
-    returned = follower.send_action(action)
+    target_frame = follower.config.target_frame_name
 
-    assert returned == action
+    viz = robot_viz(forward_kinematics)
+    viz.viewer.open()
 
-    goal_pos = {m: (i + 1) * 10 for i, m in enumerate(follower.bus.motors)}
-    follower.bus.sync_write.assert_called_once_with("Goal_Position", goal_pos)
+    def _update_kinematics(returned):
+        # Do forward kinematics with returned to see if it tracks action
+        for key, value in returned.items():
+            key = key.replace(".pos", "")
+            forward_kinematics.set_joint(key, value)
+        forward_kinematics.update_kinematics()
+
+    # Set original joint positions to something sensible
+    # FIXME: gripper seems stuck through itself? What is the right angle for it
+    follower.current_joint_pos = np.array([0, 0, 0, 0, 0, 1])
+    returned = follower.send_action({"delta_x": 0, "delta_y": 0, "delta_z": 0})
+    _update_kinematics(returned)
+    viz.display(forward_kinematics.state.q)
+
+    # Sweep X across and see if frame moves correctly
+    initial_x = forward_kinematics.get_T_world_frame(target_frame)[0, 3]
+    for i in range(0, 20):
+        # TODO: Is action in real units or multiples of end_effector_step_sizes?
+        action = {"delta_x": 1, "delta_y": 0, "delta_z": 0}
+        returned = follower.send_action(action)
+        _update_kinematics(returned)
+        viz.display(forward_kinematics.state.q)
+
+        # FIXME: send_action tries to read back positions to work out new kinematics
+        # but our bus_mock.sync_read.return_value gives back static values
+
+        # Check if the end-effector moved correctly
+        new_x = forward_kinematics.get_T_world_frame(target_frame)[0, 3]
+        assert pytest.approx(new_x) == (0.02 * i) + initial_x
