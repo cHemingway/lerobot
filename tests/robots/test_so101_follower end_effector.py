@@ -66,7 +66,7 @@ def follower():
 
     with (
         patch(
-            "lerobot.robots.so101_follower.so101_follower.FeetechMotorsBus",
+            "lerobot.robots.so101_follower.so101_follower_end_effector.FeetechMotorsBus",
             side_effect=_bus_side_effect,
         ),
         patch.object(SO101FollowerEndEffector, "configure", lambda self: None),
